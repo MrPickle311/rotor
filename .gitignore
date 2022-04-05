@@ -1,0 +1,13 @@
+.catkin_tools/
+.idea/
+.vscode/
+logs/
+src/.idea/
+/src/.vscode/
+src/<WORKSPACE_DIRECTORY>/
+src/cmake-build-debug/
+src/common_libraries/scripts/modbus/__pycache__/
+**.pyc
+build/
+devel/
+.catkin_workspace
