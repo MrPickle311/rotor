@@ -19,13 +19,83 @@ import math
 from math import pi
 from enums.com_client import DroneEventEnum
 
-class DronePositionFollower:
+
+class DronePositionIndicator:
+    DRONE_STARTED = 'drone_started'
+    DRONE_IS_FAR = 'drone_is_far'
+    DRONE_APPROACHING = 'drone_approaching'
+
+
+class DroneDistanceFollower:
     MIRANDA_LATT = 52.2205449
     MIRANDA_LONG = 21.0060927
-    # radial difference between 0N and Miranda 0 angles
-    THETA = math.radians(132)
+    LANDING_RADIUS = 50  # meters
+    FOLLOW_INTERVAL = 20 # seconds
+    EARTH_RADIUS = 6378.137  # kilometers
+
+    def __init__(self, modules: ComModules, com_collector: ComStateCollector):
+        self._modules = modules
+        self._com_collector = com_collector
+        self._drone_follow_timer = MultiTimer(self.FOLLOW_INTERVAL, self.check_drone_position,
+                                              runonstart=False)
+        self._drone_position_indicator = 'none'
+
+    def start_following(self):
+        self._drone_follow_timer.start()
+
+    def stop_following(self):
+        self._drone_follow_timer.stop()
+
+    def set_drone_started(self) -> None:
+        self._drone_position_indicator = DronePositionIndicator.DRONE_STARTED
+
+    def drone_started(self) -> bool:
+        return self._drone_position_indicator == DronePositionIndicator.DRONE_STARTED
+
+    def set_drone_is_far(self) -> None:
+        self._drone_position_indicator = DronePositionIndicator.DRONE_IS_FAR
+
+    def drone_is_far(self) -> bool:
+        return self._drone_position_indicator == DronePositionIndicator.DRONE_IS_FAR
+
+    def set_drone_is_approaching(self):
+        self._drone_position_indicator = DronePositionIndicator.DRONE_APPROACHING
+
+    @staticmethod
+    def meters(kilometers):
+        return kilometers * 1000
+
+    # https://en.wikipedia.org/wiki/Haversine_formula
+    def get_drone_distance_from_miranda(self, drone_latt: float, drone_long: float) -> float:
+        d_latt = (self.MIRANDA_LATT - drone_latt) * math.pi / 180
+        d_long = (self.MIRANDA_LONG - drone_long) * math.pi / 180
+        a = math.sin(d_latt / 2) * math.sin(d_latt) + \
+            math.cos(self.MIRANDA_LATT * math.pi / 180) * math.cos(drone_latt * math.pi / 180) * \
+            math.sin(d_long / 2) * math.sin(d_long / 2)
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        d = self.EARTH_RADIUS * c
+        return self.meters(d)
+
+    def check_drone_position(self):
+        current_distance = self.get_drone_distance_from_miranda(
+            self._com_collector.drone_state.drone_lattitude,
+            self._com_collector.drone_state.drone_longitude)
+
+        if current_distance > self.LANDING_RADIUS and self.drone_started():
+            self.set_drone_is_far()
+            return
+
+        if current_distance < self.LANDING_RADIUS and self.drone_is_far():
+            self._modules.http_client_controller.send_drone_event(
+                DroneEventEnum.DRONE_IS_READY_TO_LAND)
+            self.set_drone_is_approaching()
+            return
+
+
+class DroneRotationFollower:
+    MIRANDA_LATT = 52.2205449
+    MIRANDA_LONG = 21.0060927
     FOLLOW_INTERVAL = 1
-    LANDING_RADIUS = 343.343
 
     def __init__(self, modules: ComModules, com_collector: ComStateCollector):
         self._modules = modules
@@ -42,20 +112,10 @@ class DronePositionFollower:
     def get_drone_distance_from_miranda(self, latt: float, long: float) -> float:
         return math.sqrt((latt - self.MIRANDA_LATT) ** 2 + (long - self.MIRANDA_LONG) ** 2)
 
-    def check_drone_position(self):
-        current_latt = self._com_collector.drone_state.drone_lattitude
-        current_long = self._com_collector.drone_state.drone_longitude
-        current_distance = self.get_drone_distance_from_miranda(
-            current_latt, current_long)
-
-        if current_distance < self.LANDING_RADIUS and self.drone_is_aproaching(current_distance):
-            self._modules.http_client_controller.send_drone_event(
-                DroneEventEnum.DRONE_IS_READY_TO_LAND)
-
     # reverses anticlockwise rotor movement to clockwise movement
     @staticmethod
     def alternate(angle: float):
-        return 2*pi - angle
+        return 2 * pi - angle
 
     # converts result of atan2 from (-180:180) to (0:360)
     @staticmethod
@@ -63,28 +123,17 @@ class DronePositionFollower:
         res = math.atan2(x, y)
 
         if res < 0:
-            res += 2*math.pi
+            res += 2 * math.pi
 
         return res
 
     def correct_position(self):
-        #print(f'{self._com_collector.drone_state.drone_longitude }')
-        #print(f'{self._com_collector.drone_state.drone_lattitude }')
         x = self._com_collector.drone_state.drone_longitude - self.MIRANDA_LONG
         y = self._com_collector.drone_state.drone_lattitude - self.MIRANDA_LATT
 
         # self.get_absolute_atan(x,y)
         angle = self.alternate(math.atan2(x, y))
         self._modules.rotor_controller.go_to_absolute_pos(angle)
-
-    def drone_is_aproaching(self, current_distance: float) -> bool:
-        previous_distance = self.get_distance_from_miranda(
-            self._previous_latt, self._previous_long)
-        diff = current_distance - previous_distance
-
-        if diff >= 0:
-            return False
-        return True
 
 
 class KSSEventNotifiers:
@@ -112,7 +161,7 @@ class HttpCoreModule:
         self._state_collector = ComStateCollector()
         self._modules = ComModules(self._state_collector)
         drone_com_module = self._modules.drone_controller
-        self._drone_follower = DronePositionFollower(
+        self._drone_follower = DroneRotationFollower(
             self._modules, self._state_collector)
 
         self._drone_state_timer = MultiTimer(self.DRONE_STATE_UPDATE_INTERVAL, self.send_drone_state_do_kss,
@@ -123,10 +172,10 @@ class HttpCoreModule:
             is_ok = drone_com_module.try_upload_mission(mission_name)
             time.sleep(1)
             is_ok = drone_com_module.try_drone_start()
-            
+
             if is_ok:
                 print('Everything is sent ok')
-            
+
             return is_ok
 
         self._event_notifiers = KSSEventNotifiers(
@@ -147,7 +196,7 @@ class HttpCoreModule:
             state.drone_battery_voltage,
             state.drone_battery_temperature
         )
-    
+
     def notify_about_com_is_initialized(self):
         self._modules.http_client_controller.send_drone_event(DroneEventEnum.COM_INITIALIZED)
 
@@ -163,9 +212,8 @@ class HttpCoreModule:
         print('Enabled drone state sending to kss')
         self.notify_about_com_is_initialized()
         print('Notified com about initialization complete')
-        
+
         self._kss_server.run_server()
-        
 
 
 if __name__ == "__main__":
