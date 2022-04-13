@@ -36,7 +36,7 @@ class RotorDriver(I2CDevice):
 
     def go_to_absolute_location(self, pos_bytes: List[int]):
         command_byte = 0x05
-        self.wait_for_stop()
+        #self.wait_for_stop()
         self.write_block_data_to(command_byte, pos_bytes)
 
     def go_to_relative_location(self, direction: int, pos_bytes: List[int]):

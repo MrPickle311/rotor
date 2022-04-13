@@ -1,5 +1,5 @@
 #!/bin/bash
-source /home/ubuntu/oze/6_rotor_antena/devel/setup.bash
+source ~/05_rotor_mkt/devel/setup.bash
 
 gnome-terminal --window-with-profile=kss -e 'roslaunch mavros apm.launch fcu_url:=/dev/ttyUSB0:57600'
 sleep 15s

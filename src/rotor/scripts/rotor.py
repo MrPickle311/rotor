@@ -22,11 +22,10 @@ class RotorController:
         self._rotor_driver = RotorDriver(bus_number, device_address)
 
     def get_uint16_for_radians(self, angle: float) -> int:
-        result = int(self.UINT16_MAX * (angle / (2 * pi)))
-        return result
+        return int(self.UINT16_MAX * (angle / (2 * pi)))
 
     def convert_angle_to_bytes_list(self, angle: float) -> List[int]:
-        print(f'Angle {angle}')
+        print(f'Angle:  {angle} radians')
         return list(self.get_uint16_for_radians(angle).to_bytes(2, byteorder='big'))
 
     # return radians
@@ -39,8 +38,8 @@ class RotorController:
 
     # radians
     def go_to_absolute_position(self, angle: float):
-        bytes_to_send = self.convert_angle_to_bytes_list(angle)
-        self._rotor_driver.go_to_absolute_location(bytes_to_send)
+        self._rotor_driver.go_to_absolute_location(
+            self.convert_angle_to_bytes_list(angle))
 
     # radians
     def go_to_relative_position(self, direction: int, angle: float):
