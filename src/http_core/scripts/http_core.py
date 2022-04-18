@@ -19,6 +19,11 @@ import math
 from math import pi
 from enums.com_client import DroneEventEnum
 
+from dependency_injector.wiring import Provide, inject
+from core.containers import GlobalContainer
+from parameters.parameters import ParametersConfigurator
+from enums.parameters import Params
+
 
 class DronePositionIndicator:
     DRONE_STARTED = 'drone_started'
@@ -28,17 +33,12 @@ class DronePositionIndicator:
 
 
 class DroneDistanceFollower:
-    MIRANDA_LATT = 52.2205449
-    MIRANDA_LONG = 21.0060927
-    LANDING_RADIUS = 45  # meters
-    FAR_LANDING_RADIUS = 65  # meters
-    FOLLOW_INTERVAL = 5  # seconds
     EARTH_RADIUS = 6378.137  # kilometers
 
     def __init__(self, modules: ComModules, com_collector: ComStateCollector):
         self._modules = modules
         self._com_collector = com_collector
-        self._drone_follow_timer = MultiTimer(self.FOLLOW_INTERVAL, self.check_drone_position,
+        self._drone_follow_timer = MultiTimer(self.get_follow_interval, self.check_drone_position,
                                               runonstart=False)
         self._drone_position_indicator = 'none'
 
@@ -73,12 +73,27 @@ class DroneDistanceFollower:
     def meters(kilometers):
         return kilometers * 1000
 
+    def get_miranda_latt(self):
+        return rospy.get_param(Params.MIRANDA_LATT)
+
+    def get_miranda_long(self):
+        return rospy.get_param(Params.MIRANDA_LONG)
+
+    def get_landing_radius(self):
+        return rospy.get_param(Params.LANDING_RADIUS)
+
+    def get_far_landing_radius(self):
+        return rospy.get_param(Params.FAR_LANDING_RADIUS)
+
+    def get_follow_interval(self):
+        return rospy.get_param(Params.FOLLOW_INTERVAL)
+
     # https://en.wikipedia.org/wiki/Haversine_formula
     def get_drone_distance_from_miranda(self, drone_latt: float, drone_long: float) -> float:
-        d_latt = math.radians(self.MIRANDA_LATT - drone_latt)
-        d_long = math.radians(self.MIRANDA_LONG - drone_long)
+        d_latt = math.radians(self.get_miranda_latt() - drone_latt)
+        d_long = math.radians(self.get_miranda_long() - drone_long)
         a = math.sin(d_latt / 2) ** 2 + \
-            math.cos(math.radians(self.MIRANDA_LATT)) * math.cos(math.radians(drone_latt)) * \
+            math.cos(math.radians(self.get_miranda_latt())) * math.cos(math.radians(drone_latt)) * \
             math.sin(d_long / 2) ** 2
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
         d = self.EARTH_RADIUS * c
@@ -91,17 +106,17 @@ class DroneDistanceFollower:
 
         print(f'Curent distance: {current_distance}')
 
-        if current_distance > self.FAR_LANDING_RADIUS and self.drone_is_far():
+        if current_distance > self.get_far_landing_radius() and self.drone_is_far():
             self.set_drone_is_very_far()
             print('Drone is very far!')
             return
 
-        if current_distance > self.LANDING_RADIUS and self.drone_started():
+        if current_distance > self.get_landing_radius() and self.drone_started():
             self.set_drone_is_far()
             print('Drone is far!')
             return
 
-        if current_distance < self.LANDING_RADIUS and self.drone_is_very_far():
+        if current_distance < self.get_landing_radius() and self.drone_is_very_far():
             self._modules.http_client_controller.send_drone_event(
                 DroneEventEnum.DRONE_IS_READY_TO_LAND)
             self.set_drone_is_approaching()
@@ -110,15 +125,20 @@ class DroneDistanceFollower:
 
 
 class DroneRotationFollower:
-    MIRANDA_LATT = 52.2205449
-    MIRANDA_LONG = 21.0060927
-    FOLLOW_INTERVAL = 5
-
     def __init__(self, modules: ComModules, com_collector: ComStateCollector):
         self._modules = modules
         self._com_collector = com_collector
-        self._drone_follow_timer = MultiTimer(self.FOLLOW_INTERVAL, self.correct_position,
+        self._drone_follow_timer = MultiTimer(self.get_follow_interval, self.correct_position,
                                               runonstart=False)
+
+    def get_miranda_latt(self):
+        return rospy.get_param(Params.MIRANDA_LATT)
+
+    def get_miranda_long(self):
+        return rospy.get_param(Params.MIRANDA_LONG)
+
+    def get_follow_interval(self):
+        return rospy.get_param(Params.FOLLOW_INTERVAL)
 
     def start_following(self):
         self._drone_follow_timer.start()
@@ -127,7 +147,7 @@ class DroneRotationFollower:
         self._drone_follow_timer.stop()
 
     def get_drone_distance_from_miranda(self, latt: float, long: float) -> float:
-        return math.sqrt((latt - self.MIRANDA_LATT) ** 2 + (long - self.MIRANDA_LONG) ** 2)
+        return math.sqrt((latt - self.get_miranda_latt()) ** 2 + (long - self.get_miranda_long()) ** 2)
 
     # reverses anticlockwise rotor movement to clockwise movement
     @staticmethod
@@ -145,8 +165,8 @@ class DroneRotationFollower:
         return res
 
     def correct_position(self):
-        x = self._com_collector.drone_state.drone_longitude - self.MIRANDA_LONG
-        y = self._com_collector.drone_state.drone_lattitude - self.MIRANDA_LATT
+        x = self._com_collector.drone_state.drone_longitude - self.get_miranda_long()
+        y = self._com_collector.drone_state.drone_lattitude - self.get_miranda_latt()
 
         angle = self.alternate(self.get_absolute_atan(x, y))
         self._modules.rotor_controller.go_to_absolute_pos(angle)
@@ -216,7 +236,8 @@ class HttpCoreModule:
         )
 
     def notify_about_com_is_initialized(self):
-        self._modules.http_client_controller.send_drone_event(DroneEventEnum.COM_INITIALIZED)
+        self._modules.http_client_controller.send_drone_event(
+            DroneEventEnum.COM_INITIALIZED)
 
     def start_sending_drone_state_to_kss(self):
         self._drone_state_timer.start()
@@ -235,7 +256,18 @@ class HttpCoreModule:
         self._kss_server.run_server()
 
 
+@inject
+def init_container(parametes_updater: ParametersConfigurator = Provide[GlobalContainer.parametes_updater]):
+    ...
+
+
 if __name__ == "__main__":
+    rospy.init_node('core')
+    container = GlobalContainer()
+    container.reset_singletons()
+    container.wire(modules=[__name__])
+    init_container()
+
     th = Thread(target=lambda: rospy.init_node(
         'http_core', anonymous=True, disable_signals=True))
     th.run()

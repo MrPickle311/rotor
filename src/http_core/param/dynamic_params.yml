@@ -1,0 +1,15 @@
+max_drone_battery_voltage : 16.6
+min_drone_battery_voltage : 15.5
+drone_battery_max_temp : 40
+station_battery_max_temp : 50
+tracker_battery_max_temp : 50
+env_max_temp : 40.0
+env_max_humidity : 0.99
+env_max_rain_mm : 20.0
+env_max_wind_speed : 10.0
+env_max_gust : 25.0
+min_solar_panels_voltage : 40
+miranda_latt: 52.000
+miranda_long: 23.000
+station_battery_max_temp: 40
+tracker_battery_max_temp: 40
