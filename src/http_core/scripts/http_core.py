@@ -17,12 +17,13 @@ from core.module_controllers import ComModules
 from core.collectors import ComStateCollector
 import math
 from math import pi
-from enums.com_client import DroneEventEnum
+from enums.kss_core import ComEvent
 
 from dependency_injector.wiring import Provide, inject
 from core.containers import GlobalContainer
 from parameters.parameters import ParametersConfigurator
 from enums.parameters import Params
+from mavros_msgs.msg import StatusText
 
 
 class DronePositionIndicator:
@@ -30,10 +31,12 @@ class DronePositionIndicator:
     DRONE_IS_FAR = 'drone_is_far'
     DRONE_IS_VERY_FAR = 'drone_is_very_far'
     DRONE_APPROACHING = 'drone_approaching'
+    DRONE_IS_READY_TO_LAND = 'drone_is_ready_to_land'
 
 
 class DroneDistanceFollower:
     EARTH_RADIUS = 6378.137  # kilometers
+    LANDING_RADIUS = 30  # meters
 
     def __init__(self, modules: ComModules, com_collector: ComStateCollector):
         self._modules = modules
@@ -60,6 +63,9 @@ class DroneDistanceFollower:
     def drone_is_far(self) -> bool:
         return self._drone_position_indicator == DronePositionIndicator.DRONE_IS_FAR
 
+    def drone_is_approaching(self) -> bool:
+        return self._drone_position_indicator == DronePositionIndicator.DRONE_APPROACHING
+
     def set_drone_is_approaching(self):
         self._drone_position_indicator = DronePositionIndicator.DRONE_APPROACHING
 
@@ -68,6 +74,12 @@ class DroneDistanceFollower:
 
     def set_drone_is_very_far(self):
         self._drone_position_indicator = DronePositionIndicator.DRONE_IS_VERY_FAR
+
+    def drone_is_ready_to_land(self):
+        return self._drone_position_indicator == DronePositionIndicator.DRONE_IS_READY_TO_LAND
+
+    def set_drone_is_ready_to_land(self):
+        self._drone_position_indicator = DronePositionIndicator.DRONE_IS_READY_TO_LAND
 
     @staticmethod
     def meters(kilometers):
@@ -78,6 +90,9 @@ class DroneDistanceFollower:
 
     def get_miranda_long(self):
         return rospy.get_param(Params.MIRANDA_LONG)
+
+    def get_close_landing_radius(self):
+        return rospy.get_param(Params.CLOSE_LANDING_RADIUS)
 
     def get_landing_radius(self):
         return rospy.get_param(Params.LANDING_RADIUS)
@@ -118,9 +133,17 @@ class DroneDistanceFollower:
 
         if current_distance < self.get_landing_radius() and self.drone_is_very_far():
             self._modules.http_client_controller.send_drone_event(
-                DroneEventEnum.DRONE_IS_READY_TO_LAND)
+                ComEvent.DRONE_IS_APPROACHING)
             self.set_drone_is_approaching()
             print('Drone is approaching!')
+            return
+
+        if current_distance < self.get_close_landing_radius() and self.drone_is_approaching():
+            time.sleep(10)
+            self._modules.http_client_controller.send_drone_event(
+                ComEvent.DRONE_IS_READY_TO_LAND)
+            self.set_drone_is_ready_to_land()
+            print('Drone is ready to land!')
             return
 
 
@@ -183,14 +206,13 @@ class KSSEventNotifiers:
             '/com', '/kss_event/upload_mission', MissionReceiver(task))
 
     def add_task_event(self, task_path: str, task: Callable[[], bool]):
-        # TODO: add abort mission
-        # simple_kss_task_events = ['abort_drone']
         self._kss_server_api.add_api_path_handler(
             '/com', f'/kss_event/{task_path}', KSSTaskReceiver(task))
 
 
 class HttpCoreModule:
     DRONE_STATE_UPDATE_INTERVAL = 1
+    DRONE_LAND_TIMEOUT = 60
 
     def __init__(self):
         self._kss_server = COMServerAPI('com_server', 4000, '192.168.1.16')
@@ -204,6 +226,12 @@ class HttpCoreModule:
 
         self._drone_state_timer = MultiTimer(self.DRONE_STATE_UPDATE_INTERVAL, self.send_drone_state_do_kss,
                                              runonstart=False)
+
+        self._drone_landing_timer = MultiTimer(
+            self.DRONE_LAND_TIMEOUT, self.land_emergency, runonstart=False)
+
+        self._modules.drone_controller.add_signal_receiver(
+            '/mavros/statustext/recv', StatusText)
 
         def try_start_and_upload_mission(mission_name) -> bool:
             is_ok = False
@@ -219,11 +247,28 @@ class HttpCoreModule:
         self._event_notifiers = KSSEventNotifiers(
             self._kss_server, try_start_and_upload_mission)
         self._event_notifiers.add_task_event(
-            'land_drone_normally', drone_com_module.try_land_normally)
+            'land_drone_normally', self.land_normally)
         self._event_notifiers.add_task_event(
-            'land_drone_emergency', drone_com_module.try_land_emergency)
+            'land_drone_emergency', self.land_emergency)
         self._event_notifiers.add_task_event(
             'abort_drone', drone_com_module.try_return_drone)
+
+    def notify_about_drone_landed(self, msg: StatusText):
+        if msg.text == 'DRONE_LANDED':
+            self._modules.http_client_controller.send_drone_event(
+                ComEvent.DRONE_LANDED)
+
+    def land_emergency(self):
+        self._drone_landing_timer.stop()
+        result = False
+        while result == False:
+            result = self._modules.drone_controller.try_land_emergency()
+        return True
+
+    def land_normally(self):
+        self._drone_landing_timer.start()
+        self._modules.drone_controller.try_land_normally()
+        return True
 
     def send_drone_state_do_kss(self):
         state = self._state_collector.drone_state
@@ -237,7 +282,7 @@ class HttpCoreModule:
 
     def notify_about_com_is_initialized(self):
         self._modules.http_client_controller.send_drone_event(
-            DroneEventEnum.COM_INITIALIZED)
+            ComEvent.COM_INITIALIZED)
 
     def start_sending_drone_state_to_kss(self):
         self._drone_state_timer.start()
