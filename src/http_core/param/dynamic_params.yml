@@ -11,5 +11,7 @@ env_max_gust : 25.0
 min_solar_panels_voltage : 40
 miranda_latt: 52.000
 miranda_long: 23.000
-station_battery_max_temp: 40
-tracker_battery_max_temp: 40
+close_landing_radius: 30
+landing_radius: 55
+far_landing_radius: 70
+follow_interval: 5
